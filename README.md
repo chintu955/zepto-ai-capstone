@@ -1,121 +1,80 @@
-# Zepto Data & AI Platform — Capstone Project
+# Analytics Module — Findings & Written Interpretations
 
-Single repository containing three connected modules:
+(Numbers below are computed directly from `sns.load_dataset('titanic')`,
+which is a fixed/static dataset, so these values are reproducible by
+re-running `01_eda.py`.)
 
-- `/data_pipeline` — scrape → clean → convert → store → query (books.toscrape.com)
-- `/analytics` — EDA + predictive modeling pipeline on the Titanic dataset
-- `/support_assistant` — a grounded GenAI RAG support assistant over Zepto policy docs
+## Missing Value Report & Handling
 
----
+| Column | % Missing | Strategy | Justification |
+|---|---|---|---|
+| age | 19.87% | Median impute | Falls in the 5–30% band; median is robust to the right-skew in age. |
+| embarked | 0.22% | Drop rows | Under 5%; only 2 rows affected, negligible information loss. |
+| embark_town | 0.22% | Drop rows | Same 2 rows as `embarked`. |
+| deck | 77.22% | Encode as "Missing" category | Too high (>30%) to impute reliably without introducing bias; kept as its own category instead of dropping the column, since cabin deck may still carry weak signal for the rows that do have it. |
 
-## 1. Setup
+Shape after cleaning: **889 rows × 15 columns** (down from 891, due to the 2 dropped `embarked` rows).
 
-Each module has its own `requirements.txt` (chosen over one consolidated file, since
-the three modules have non-overlapping dependencies — e.g. `beautifulsoup4` is only
-needed for scraping, `chromadb`/`langgraph` only for the assistant).
+## Univariate Analysis — Outliers & Skew
 
-```bash
-# clone
-git clone https://github.com/<your-username>/zepto-ai-capstone.git
-cd zepto-ai-capstone
+- **Age outliers (IQR rule):** 65 values outside [2.5, 54.5].
+- **Fare outliers (IQR rule):** 114 values outside [-26.76, 65.66] (i.e., any fare above ~65.66).
+- **Fare — mean=32.10, median=14.45, mode=8.05.** Since mean > median > mode, fare is
+  **right-skewed**: a small number of high-paying (mostly 1st-class) passengers pull
+  the mean well above the typical (median) fare, while the single most common price
+  point (mode) sits even lower, near the cheapest 3rd-class fares.
 
-# create one virtual env (or one per module, your choice)
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
+## Bivariate Analysis — Survival Rates
 
-pip install -r data_pipeline/requirements.txt
-pip install -r analytics/requirements.txt
-pip install -r support_assistant/requirements.txt
-```
+- **By sex:** female = 74.04%, male = 18.89%.
+- **By pclass:** 1st = 62.62%, 2nd = 47.28%, 3rd = 24.24%.
+- **By sex & pclass:** 1st-class women survived at 96.74%, versus 3rd-class men at
+  only 13.54% — the largest gap in the dataset, showing sex and class compounded
+  rather than acting independently.
 
-## 2. How to run each module
+## Correlation Matrix — Top 2 Strongest Pairs
 
-### Module 1 — Data Pipeline
-```bash
-cd data_pipeline
-python scrape_and_load.py
-```
-Produces `raw_books.csv`, `clean_books.csv`, and `zepto_books.db` (SQLite), and prints
-the 5 SQL queries + the `pd.read_sql` vs `pd.merge` comparison to the console.
+Computed on `[survived, pclass, age, sibsp, parch, fare]`:
 
-**Design decisions:**
-- Fixed conversion rate used: **1 GBP = 105.50 INR** (project-defined constant, no live lookup).
-- Rows with unparseable title/availability are dropped; unparseable numeric fields
-  (price/rating) are median-imputed rather than dropped, to preserve as much data as possible.
-- Schema: `categories(category_id PK, category_name)` ← `books(book_id PK, ..., category_id FK)`.
+1. **pclass & fare: r = -0.548** — lower `pclass` numbers (1st class) pair with much
+   higher fares, as expected since pclass is essentially a proxy for ticket price tier.
+2. **sibsp & parch: r = 0.415** — passengers traveling with siblings/spouses also
+   tended to travel with parents/children, i.e., families tended to book together
+   rather than these being independent companions.
 
-### Module 2 — Analytics
-```bash
-cd analytics
-python 01_eda.py         # loads titanic dataset once, cleans it, saves titanic.csv + charts
-python 02_modeling.py    # reads the same titanic.csv, runs the full modeling pipeline
-```
-Produces `titanic.csv` (offline fallback), chart PNGs in `charts/`, and
-`best_pipeline.joblib` (the full fitted preprocessing + RandomForest pipeline).
+## Multivariate Data Story (see `charts/story_*.png`)
 
-**Design decisions:**
-- Missing-value thresholds: <5% missing → drop rows; 5–30% → median/mode impute;
-  very high missing (`deck`, ~77%) → encode as its own "Missing" category rather than impute.
-- All preprocessing (imputer, encoder, scaler) is wrapped in a `ColumnTransformer` +
-  `Pipeline`, fit only on the training split, to structurally prevent test-set leakage.
-- Random Forest was selected as the deployed classifier and saved as one complete
-  `joblib` artifact (preprocessing + model together) so it works directly on raw input.
+1. **Survival by class & sex** — women survived far more than men in every class,
+   and 1st-class women survived at the highest rate overall, reflecting the
+   "women and children first" protocol combined with 1st-class cabins being closer
+   to lifeboats.
+2. **Age distribution by survival** — survivors skew slightly younger, with a
+   visible cluster of young children, consistent with children being prioritized.
+3. **Fare vs age, colored by survival** — higher-fare passengers show denser
+   survival markers, reinforcing that socio-economic class tracked survival
+   independent of age.
+4. **Survival by embarkation port** — passengers boarding at Cherbourg (C) show a
+   higher survival share than Southampton (S), correlating with a higher proportion
+   of 1st-class passengers embarking at C.
 
-### Module 3 — Support Assistant
-```bash
-cd support_assistant
-python ingest.py                      # embeds the 8 docs into ChromaDB (local, no API key)
-uvicorn main:app --host 0.0.0.0 --port 7860
-# in another terminal:
-curl -X POST http://localhost:7860/ask -H "Content-Type: application/json" \
-     -d '{"query": "What is your delivery fee?"}'
-```
+## Modeling — Final Comparison & Recommendation
 
-Or with Docker:
-```bash
-cd support_assistant
-docker build -t zepto-assistant .
-docker run -p 7860:7860 zepto-assistant
-```
+See the console output of `02_modeling.py` for the exact run's classifier metrics
+table (accuracy/precision/recall/F1/AUC for Logistic Regression, Decision Tree, and
+Random Forest), the imbalance-handling comparison, GridSearchCV best parameters +
+OOB score, and the regression metrics (MAE/RMSE/R²/Adjusted R²) for the fare model.
 
-**Design decisions:**
-- `MOCK_LLM` defaults to `1` (unset also counts as mock) — this is the fully graded,
-  offline, deterministic path. No API key or network call to any LLM is required.
-- Embeddings are generated locally with `sentence-transformers/all-MiniLM-L6-v2` and
-  stored in a persistent ChromaDB collection — no account or API key needed.
-- See `/support_assistant/README.md` for the full architecture write-up and example
-  request/response transcripts.
+**Recommendation:** Random Forest is the recommended model to deploy. Across runs it
+consistently achieves the best or near-best F1 and AUC among the three classifiers,
+because it captures non-linear interactions between `sex`, `pclass`, and `fare` that
+Logistic Regression cannot, while being less prone to overfitting than a single
+Decision Tree. The complete fitted pipeline (preprocessing + Random Forest) is saved
+as `best_pipeline.joblib` and reloads correctly on raw input (verified in
+`02_modeling.py`'s final step).
 
----
+## Heteroscedasticity (Regression Residuals)
 
-## 3. Git Workflow
-
-This repository's history includes a feature branch (`feature/support-assistant`)
-created off `main`, committed to at least twice, and merged back into `main`.
-Visible via:
-```bash
-git log --graph --all --oneline
-```
-
-## 4. Repository Structure
-
-```
-zepto-ai-capstone/
-├── README.md
-├── data_pipeline/
-│   ├── scrape_and_load.py
-│   └── requirements.txt
-├── analytics/
-│   ├── 01_eda.py
-│   ├── 02_modeling.py
-│   └── requirements.txt
-└── support_assistant/
-    ├── docs/doc_01.txt … doc_08.txt
-    ├── ingest.py
-    ├── prompts.py
-    ├── graph.py
-    ├── main.py
-    ├── Dockerfile
-    ├── requirements.txt
-    └── README.md
-```
+The residual plot (`charts/residual_plot.png`) shows the spread of residuals
+widening as predicted fare increases (a funnel shape), indicating
+**heteroscedasticity** — the model's errors are not uniform across the range of
+fares, and it is comparatively less precise for high-fare passengers.
