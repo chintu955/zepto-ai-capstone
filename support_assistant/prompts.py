@@ -44,3 +44,4 @@ ANSWER:
 
 def build_prompt(query: str, retrieved_context: str) -> str:
     return RAG_PROMPT_TEMPLATE.format(query=query, retrieved_context=retrieved_context)
+# Reviewed negative constraint and few-shot example for clarity
