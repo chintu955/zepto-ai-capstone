@@ -95,3 +95,5 @@ curl -X POST http://localhost:7860/ask -H "Content-Type: application/json" \
   var to enable real LLM classification/generation.
 - Push the same Dockerfile to Hugging Face Spaces (free CPU tier) and store
   the API key as a Space secret — never commit it to the repo.
+
+<!-- Reviewed architecture and retrieval flow -->
