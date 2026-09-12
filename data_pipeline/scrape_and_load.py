@@ -187,7 +187,8 @@ def build_database(df, db_path="zepto_books.db"):
 # STEP 5: SQL QUERIES
 # ---------------------------------------------------------------------------
 
-def run_queries(conn):
+def run_queries(conn, log_path="query_log.txt"):
+    log_lines = []
     queries = {
         "Q1_select_where": """
             SELECT title, price_inr, rating FROM books
@@ -223,8 +224,16 @@ def run_queries(conn):
     for name, q in queries.items():
         df_result = pd.read_sql(q, conn)
         results[name] = df_result
-        print(f"\n--- {name} ---")
-        print(df_result.to_string(index=False))
+        header = f"\n--- {name} ---\nSQL:\n{q.strip()}\n\nOutput:"
+        body = df_result.to_string(index=False)
+        print(header)
+        print(body)
+        log_lines.append(header)
+        log_lines.append(body)
+
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(log_lines))
+    print(f"\nAll query text + output also saved to {log_path}")
     return results
 
 
